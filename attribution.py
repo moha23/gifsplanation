@@ -15,7 +15,7 @@ import os,sys
 import torchxrayvision as xrv
 
 
-def compute_attribution(image, method, clf, target, plot=False, ret_params=False, fixrange=None, p=0.0, ae=None, sigma=0, threshold=False):
+def compute_attribution(image, method, clf, label, plot=False, ret_params=False, fixrange=None, p=0.0, ae=None, sigma=0, threshold=False):
     print('=============================Inside Compute Attribution===============================================')
     image = image.clone().detach()
     image_shape = image.shape[-2:]
