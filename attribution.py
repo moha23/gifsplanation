@@ -16,7 +16,7 @@ import torchxrayvision as xrv
 
 
 def compute_attribution(image, method, clf, target, plot=False, ret_params=False, fixrange=None, p=0.0, ae=None, sigma=0, threshold=False):
-    
+    print('=============================Inside Compute Attribution===============================================')
     image = image.clone().detach()
     image_shape = image.shape[-2:]
     def clean(saliency):
@@ -34,7 +34,29 @@ def compute_attribution(image, method, clf, target, plot=False, ret_params=False
         z = ae.encode(image).detach()
         z.requires_grad = True
         xp = ae.decode(z, image_shape)
-        pred = F.sigmoid(clf((image*p + xp*(1-p))))[:,clf.pathologies.index(target)]
+
+        pred_logits = F.softmax(clf((image*p + xp*(1-p))))
+        pred_target = torch.argmax(pred_logits, dim=1)
+        print('Ground Truth:', int(label))
+        print('Initial pred_logits:', pred_logits)
+        print('Initial pred_target:', pred_target)
+        if pred_target==label:
+          target = clf.pathologies[int(label.item())]
+          print('pred_target == label, hence same target chosen:',target)
+          if target == 'Normal':
+              parampath = 'corrClf-Normal'
+          else:
+              parampath = 'corrClf-Glaucoma'
+        else:
+          target = clf.pathologies[pred_target.item()]
+          print('pred_target != label, hence target same as pred_target:',target)
+          if target == 'Normal':
+              parampath = 'incorrClf-Normal'
+          else:
+              parampath = 'incorrClf-Glaucoma'
+        pred = pred_logits[:,clf.pathologies.index(target)]
+        print('Initial pred1:', pred)
+        # pred = F.sigmoid(clf((image*p + xp*(1-p))))[:,clf.pathologies.index(target)]
         dzdxp = torch.autograd.grad((pred), z)[0]
         
         cache = {}
@@ -49,7 +71,7 @@ def compute_attribution(image, method, clf, target, plot=False, ret_params=False
         #determine range
         #initial_pred = pred.detach().cpu().numpy()
         _, initial_pred = compute_shift(0)
-        
+        print('Initial pred2:', pred)
         
         if fixrange:
             lbound,rbound = fixrange
@@ -62,12 +84,15 @@ def compute_attribution(image, method, clf, target, plot=False, ret_params=False
             last_pred = initial_pred
             while True:
                 xpp, cur_pred = compute_shift(lbound)
-                #print("lbound",lbound, "last_pred",last_pred, "cur_pred",cur_pred)
+                print("lbound",lbound, "last_pred",last_pred, "cur_pred",cur_pred)
                 if last_pred < cur_pred:
+                    print('BREAKING DUE TO last_pred < cur_pred')
                     break
-                if initial_pred-0.15 > cur_pred:
+                if initial_pred-0.5 > cur_pred:
+                    print('BREAKING DUE TO  initial_pred-0.5 > cur_pred')
                     break
                 if lbound <= -1000:
+                    print('BREAKING DUE TO  lbound <= -1000')
                     break
                 last_pred = cur_pred
                 if np.abs(lbound) < step:
@@ -93,14 +118,16 @@ def compute_attribution(image, method, clf, target, plot=False, ret_params=False
 #                 else:
 #                     rbound = rbound + step
         
-        print(initial_pred, lbound,rbound)
+        print('initial_pred:',initial_pred,'final lbound:',lbound,'final rbound:',rbound)
         #lambdas = np.arange(lbound,rbound,(rbound+np.abs(lbound))//10)
         lambdas = np.arange(lbound,rbound,np.abs((lbound-rbound)/10))
+        print('learnt lambdas:', lambdas)
         ###########################
         
         y = []
         dimgs = []
         xp = ae.decode(z,image_shape)[0][0].unsqueeze(0).unsqueeze(0).detach()
+        print('For each lambda, acquiring new preds and counterfactuals....')
         for lam in lambdas:
             
             xpp, pred = compute_shift(lam)
@@ -113,6 +140,9 @@ def compute_attribution(image, method, clf, target, plot=False, ret_params=False
             params["lambdas"] = lambdas
             params["y"] = y
             params["initial_pred"] = initial_pred
+            params["target"] = target
+            params["path"] = parampath
+            print('=============================End Compute Attribution, returning params===============================================')
             return params
         
         if plot:
@@ -268,85 +298,164 @@ def run_eval(target, data, model, ae, to_eval=None, compute_recon=False, pthresh
                     break
     return pd.DataFrame(results)
 
-import matplotlib as mpl
-def full_frame(width=None, height=None):
 
-    mpl.rcParams['savefig.pad_inches'] = 0
+def generate_video(
+    params: dict,
+    target_filename: str,
+    watermark: bool = True,
+    show_pred: bool = True,
+    ffmpeg_path: str = "ffmpeg",
+    temp_path: str = "/tmp/gifsplanation",
+    show: bool = True,
+    verbose: bool = True,
+    extra_loops: int = 0,
+    cmap: str = None,
+):
+    """Generate a video from the generated images.
+
+    Args:
+        params: The dict returned from the call to `attribute`.
+        target_filename: The filename to write the video to. `.mp4` will
+            be added to the end of the string.
+        watermark: To add the probability output and the name of the
+            method.
+        ffmpeg_path: The path to call `ffmpeg`
+        temp_path: A temp path to write images.
+        show: To try and show the video in a jupyter notebook.
+        verbose: True to print debug text
+        extra_loops: The video does one loop by default. This will repeat
+            those loops to make it easier to watch.
+        cmap: The cmap value passed to matplotlib. e.g. 'gray' for a
+            grayscale image.
+
+    Returns:
+        The filename of the video if show=False, otherwise it will
+        return a video to show in a jupyter notebook.
+    """
+
+    if os.path.exists(target_filename + ".mp4"):
+        os.remove(target_filename + ".mp4")
+
+    shutil.rmtree(temp_path, ignore_errors=True)
+    os.mkdir(temp_path)
+
+    imgs = [h.transpose(1, 2, 0) for h in params["generated_images"]]
+
+    # Add reversed so we have an animation cycle
+    towrite = list(reversed(imgs)) + list(imgs)
+    
+    if show_pred:
+        ys = list(reversed(params["preds"])) + list(params["preds"])
+
+    for n in range(extra_loops):
+        towrite += towrite
+        if show_pred:
+            ys += ys
+
+    for idx, img in enumerate(towrite):
+        path = f"{temp_path}/image-{idx}.png"
+        write_frame(
+            img, 
+            path=path, 
+            pred=ys[idx] if show_pred else None, 
+            cmap=cmap, 
+            watermark=watermark, 
+            pred_max=max(ys) if show_pred else "",
+        )
+
+    # Command for ffmpeg to generate an mp4
+    cmd = (
+        f"{ffmpeg_path} -loglevel quiet -stats -y "
+        f"-i {temp_path}/image-%d.png "
+        f"-c:v libx264 -vf scale=-2:{imgs[0][0].shape[0]} "
+        f"-profile:v baseline -level 3.0 -pix_fmt yuv420p "
+        f"'{target_filename}.mp4'"
+    )
+
+    if verbose:
+        print(cmd)
+    output = subprocess.check_output(cmd, shell=True)
+    if verbose:
+        print(output)
+
+    if show:
+        # If we in a jupyter notebook then show the video.
+        from IPython.core.display import Video
+
+        try:
+            return Video(
+                target_filename + ".mp4",
+                html_attributes="controls loop autoplay muted",
+                embed=True,
+            )
+        except TypeError:
+            return Video(target_filename + ".mp4", embed=True)
+    else:
+        return target_filename + ".mp4"
+
+
+def full_frame(width=None, height=None):
+    """Setup matplotlib so we can write to the entire canvas"""
+
+    matplotlib.rcParams["savefig.pad_inches"] = 0
     figsize = None if width is None else (width, height)
-    fig = plt.figure(figsize=figsize)
-    ax = plt.axes([0,0,1,1], frameon=False)
+    plt.figure(figsize=figsize)
+    ax = plt.axes([0, 0, 1, 1], frameon=False)
     ax.get_xaxis().set_visible(False)
     ax.get_yaxis().set_visible(False)
     plt.autoscale(tight=True)
 
-def generate_video(image, model, target, ae, temp_path="/tmp/gifsplanation", method="latentshift", target_filename=None, border=True, note="", show=False, watermark=True, ffmpeg_path="ffmpeg", fixrange=None):
-    
-    params = compute_attribution(image, method, model, target, ret_params=True, ae=ae, fixrange=fixrange)
-    dimgs = params["dimgs"]
-    
-    #ffmpeg -i gif-tmp/image-%d-a.png -vcodec libx264 aout.mp4
-    if os.path.exists(target_filename + ".mp4"):
-        os.remove(target_filename + ".mp4") 
-    shutil.rmtree(temp_path, ignore_errors=True) 
-    towrite = list(reversed(dimgs)) + list(dimgs) # 
-    img = image[0][0].cpu().numpy()
 
-    for idx, dimg in enumerate(towrite):
-        if idx % 10 == 0:
-            print(idx)
-            
-        #p = model(torch.from_numpy(dimg))[0,model.pathologies.index(target)].detach().cpu().numpy()
+def write_frame(img, path, text=None, pred=None, cmap=None, watermark=True, pred_max=1):
 
-        if border:
-            px = 1/plt.rcParams['figure.dpi']
-            full_frame(dimg[0][0].shape[0]*px*2,dimg[0][0].shape[1]*px)
-            plt.imshow(np.concatenate([img,dimg[0][0]], 1), interpolation='none', cmap='Greys_r')
-            #plt.title("Pred of {}: {:.2f}".format(target, p),fontsize=25)
-        else:
-            px = 1/plt.rcParams['figure.dpi']
-            full_frame(dimg[0][0].shape[0]*px,dimg[0][0].shape[1]*px)
-            
-            
-            plt.imshow(dimg[0][0], interpolation='none', cmap='Greys_r')
-        plt.axis('off')
-        
-        if watermark:
-            plt.text(  # position text relative to Axes
-                0.96, 0.1, 'gifsplanation',
-                ha='right', va='bottom',
-                transform=plt.gca().transAxes
-            )
-        
-        if not os.path.exists(temp_path): 
-            os.mkdir(temp_path)
-        for k in range(6):
-            i = idx + len(towrite)*k
-            plt.savefig(temp_path +'/image-' + str(i) + '-a.png', bbox_inches='tight', pad_inches=0, transparent=False)
-            
-        plt.close()
-        
-    if not target_filename:
-        target_filename = "videos/single-{}_{}_{}_{}".format(
-            target,
-            str(ae),
-            str(model),
-            note)
+    px = 1 / plt.rcParams["figure.dpi"]
+    full_frame(img.shape[0] * px, img.shape[1] * px)
+    plt.imshow(img, interpolation="none", cmap=cmap)
 
-    
-    cmd = "{} -loglevel quiet -stats -y -i {}/image-%d-a.png -c:v libx264 -vf scale=-2:{} -profile:v baseline -level 3.0 -pix_fmt yuv420p '{}.mp4'".format(ffmpeg_path, temp_path,dimg[0][0].shape[0],target_filename)
-    
-    print(cmd)
-    #os.system(cmd)
-    import subprocess
-    output = subprocess.check_output(cmd, shell=True)
-    print(output)
-    
-    if show:
-        from IPython.core.display import Video
-        return Video(target_filename + ".mp4", embed=True)
-    else:
-        return target_filename + ".mp4"
+    if pred:
+        # Show pred as bar in upper left
+        plt.text(
+            0.05,
+            0.95,
+            f"{float(pred):1.2f} " + "█"*int(pred/pred_max*100),
+            ha="left",
+            va="top",
+            transform=plt.gca().transAxes,
+            size=img.shape[0]//120,
+            backgroundcolor="white",
+        )
 
+    if text:
+        # Write prob output in upper left
+        plt.text(
+            0.05,
+            0.95,
+            f"{float(text):1.1f}",
+            ha="left",
+            va="top",
+            size=img.shape[0]//50,
+            transform=plt.gca().transAxes,
+        )
+
+    if watermark:
+        # Write method name in lower right
+        plt.text(
+            0.96,
+            0.1,
+            "gifsplanation",
+            ha="right",
+            va="bottom",
+            size=img.shape[0]//30,
+            transform=plt.gca().transAxes,
+        )
+
+    plt.savefig(
+        path,
+        bbox_inches="tight",
+        pad_inches=0,
+        transparent=False,
+    )
+    plt.close()
     
     
     
