@@ -64,14 +64,14 @@ def compute_attribution(image, method, clf, label, plot=False, ret_params=False,
             #print(lam)
             if lam not in cache:
                 xpp = ae.decode(z+dzdxp*lam, image_shape).detach()
-                pred1 = F.sigmoid(clf((image*p + xpp*(1-p))))[:,clf.pathologies.index(target)].detach().cpu().numpy()
+                pred1 = F.softmax(clf((image*p + xpp*(1-p))))[:,clf.pathologies.index(target)].detach().cpu().numpy()
                 cache[lam] = xpp, pred1
             return cache[lam]
         
         #determine range
         #initial_pred = pred.detach().cpu().numpy()
         _, initial_pred = compute_shift(0)
-        print('Initial pred2:', pred)
+        print('Initial pred2:', initial_pred)
         
         if fixrange:
             lbound,rbound = fixrange
