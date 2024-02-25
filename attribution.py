@@ -13,7 +13,7 @@ import pandas as pd
 import shutil
 import os,sys
 import torchxrayvision as xrv
-
+from torchvision import transforms
 
 def compute_attribution(image, method, clf, label, plot=False, ret_params=False, fixrange=None, p=0.0, ae=None, sigma=0, threshold=False):
     print('=============================Inside Compute Attribution===============================================')
@@ -34,7 +34,8 @@ def compute_attribution(image, method, clf, label, plot=False, ret_params=False,
         z = ae.encode(image).detach()
         z.requires_grad = True
         xp = ae.decode(z, image_shape)
-
+        # bring to 0,1 here
+        xp = transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))(xp)
         pred_logits = F.softmax(clf((image*p + xp*(1-p))))
         pred_target = torch.argmax(pred_logits, dim=1)
         print('Ground Truth:', int(label))
@@ -64,6 +65,8 @@ def compute_attribution(image, method, clf, label, plot=False, ret_params=False,
             #print(lam)
             if lam not in cache:
                 xpp = ae.decode(z+dzdxp*lam, image_shape).detach()
+                # bring to 0,1 here    
+                xpp = transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))(xpp)
                 pred1 = F.softmax(clf((image*p + xpp*(1-p))))[:,clf.pathologies.index(target)].detach().cpu().numpy()
                 cache[lam] = xpp, pred1
             return cache[lam]
@@ -84,6 +87,7 @@ def compute_attribution(image, method, clf, label, plot=False, ret_params=False,
             last_pred = initial_pred
             while True:
                 xpp, cur_pred = compute_shift(lbound)
+        
                 print("lbound",lbound, "last_pred",last_pred, "cur_pred",cur_pred)
                 if last_pred < cur_pred:
                     print('BREAKING DUE TO last_pred < cur_pred')
@@ -126,7 +130,10 @@ def compute_attribution(image, method, clf, label, plot=False, ret_params=False,
         
         y = []
         dimgs = []
-        xp = ae.decode(z,image_shape)[0][0].unsqueeze(0).unsqueeze(0).detach()
+        xp = ae.decode(z,image_shape)   
+        xp = transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))(xp)
+        xp = xp[0][0].unsqueeze(0).unsqueeze(0).detach()
+        # bring to 0,1 here
         print('For each lambda, acquiring new preds and counterfactuals....')
         for lam in lambdas:
             
