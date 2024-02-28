@@ -36,7 +36,8 @@ def compute_attribution(image, method, clf, label, plot=False, ret_params=False,
         xp = ae.decode(z, image_shape)
         # bring to 0,1 here
         xp = (xp+1)/2
-        pred_logits = F.softmax(clf((image*p + xp*(1-p))))
+        # pred_logits = F.softmax(clf((image*p + xp*(1-p))))
+        pred_logits = F.softmax(clf(((torch.nn.Upsample([224,224])(image))*p + (torch.nn.Upsample([224,224])(xp))*(1-p))))
         pred_target = torch.argmax(pred_logits, dim=1)
         print('Ground Truth:', int(label))
         print('Initial pred_logits:', pred_logits)
@@ -67,7 +68,10 @@ def compute_attribution(image, method, clf, label, plot=False, ret_params=False,
                 xpp = ae.decode(z+dzdxp*lam, image_shape).detach()
                 # bring to 0,1 here    
                 xpp = (xpp+1)/2
-                pred1 = F.softmax(clf((image*p + xpp*(1-p))))[:,clf.pathologies.index(target)].detach().cpu().numpy()
+                # pred1 = F.softmax(clf((image*p + xpp*(1-p))))[:,clf.pathologies.index(target)].detach().cpu().numpy()
+                imageu = torch.nn.Upsample([224,224])(image)
+                xppu = torch.nn.Upsample([224,224])(xpp)
+                pred1 = F.softmax(clf((imageu*p + xppu*(1-p))))[:,clf.pathologies.index(target)].detach().cpu().numpy()
                 cache[lam] = xpp, pred1
             return cache[lam]
         
